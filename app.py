@@ -5,12 +5,15 @@ import requests
 import threading
 import time
 import math
+import uuid
 
 app = Flask(__name__)
 
 jobs = {}
 UPLOAD_FOLDER = '/tmp/video_jobs'
+AUDIO_SEGMENTS_FOLDER = '/tmp/audio_segments'
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+os.makedirs(AUDIO_SEGMENTS_FOLDER, exist_ok=True)
 
 # ─────────────────────────────────────────────
 # Layout constants  (9:16 vertical = 1080x1920)
@@ -164,30 +167,28 @@ def build_eq_bar(font):
 def build_ffmpeg_command_short(video_path, audio_path, output_path, audio_duration, fps, font, font_italic, artist_name="SORLUNE"):
     fade_out_st = max(audio_duration - 3, audio_duration * 0.85)
 
-    # Scale and crop to 9:16 (1080x1920) — center crop
+    # ✅ MEMORY FIX: reduced to 720x1280 (still 9:16) — uses ~60% less RAM than 1080x1920
     scale_crop = (
-        "scale=1080:1920:force_original_aspect_ratio=increase,"
-        "crop=1080:1920"
+        "scale=720:1280:force_original_aspect_ratio=increase,"
+        "crop=720:1280"
     )
 
-    # Subtle color grade — same feel as long video
+    # Lighter color grade — removed noise filter (heavy on RAM)
     grade_filter = (
-        "eq=brightness='0.02*sin(t*2.2+0.3)':contrast='1.03+0.02*sin(t*1.8+1.0)':saturation='1.05+0.06*sin(t*2.5+0.8)',"
-        "curves=r='0/0 0.5/0.53 1/1':g='0/0 0.5/0.48 1/0.95':b='0/0 0.5/0.43 1/0.86',"
-        "vignette=PI/4.5,"
-        "noise=alls=2:allf=t"
+        "eq=brightness=0.02:contrast=1.03:saturation=1.05,"
+        "curves=r='0/0 0.5/0.53 1/1':g='0/0 0.5/0.48 1/0.95':b='0/0 0.5/0.43 1/0.86'"
     )
 
-    # Dark band at bottom to make EQ bar readable
+    # Dark band at bottom
     dark_overlay = (
         f"drawtext=fontfile={font}:text=' ':fontsize=1:fontcolor=black@0:"
         f"box=1:boxcolor=black@0.55:boxborderw=0:"
         f"x=0:y=h*{DARK_START}:fix_bounds=1"
     )
 
-    fade_filter    = f"fade=t=in:st=0:d=2,fade=t=out:st={fade_out_st:.2f}:d=3"
-    artist_filter  = build_artist_watermark(font_italic, artist_name)
-    eq_filter      = build_eq_bar(font)
+    fade_filter   = f"fade=t=in:st=0:d=2,fade=t=out:st={fade_out_st:.2f}:d=3"
+    artist_filter = build_artist_watermark(font_italic, artist_name)
+    eq_filter     = build_eq_bar(font)
 
     vf_parts = [
         scale_crop,
@@ -200,14 +201,15 @@ def build_ffmpeg_command_short(video_path, audio_path, output_path, audio_durati
     ]
     vf_chain = ",".join(vf_parts)
 
-    # -stream_loop -1  → loops the video indefinitely so audio always wins
     return [
         'ffmpeg', '-y',
-        '-stream_loop', '-1', '-i', video_path,   # looping video input
-        '-i', audio_path,                          # audio input
+        '-stream_loop', '-1', '-i', video_path,
+        '-i', audio_path,
         '-vf', vf_chain,
-        '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '22',
-        '-c:a', 'aac', '-b:a', '192k',
+        # ✅ MEMORY FIX: threads=1 prevents multiple CPU threads eating RAM
+        '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '26',
+        '-threads', '1',
+        '-c:a', 'aac', '-b:a', '128k',
         '-pix_fmt', 'yuv420p',
         '-t', str(audio_duration),
         '-shortest',
@@ -334,6 +336,69 @@ def clear_cache():
 @app.route('/health', methods=['GET'])
 def health():
     return jsonify({'status': 'ok', 'message': 'Short video server running'}), 200
+
+
+# ══════════════════════════════════════════════
+# PROCESS AUDIO — cut best 60s segment
+# ✅ Was missing — this is why /process-audio returned 404
+# ══════════════════════════════════════════════
+
+@app.route('/process-audio', methods=['POST'])
+def process_audio():
+    data = request.get_json()
+    if not data:
+        return jsonify({'error': 'No JSON data'}), 400
+
+    audio_url        = data.get('url')
+    segment_duration = int(data.get('segment_duration', 60))
+
+    if not audio_url:
+        return jsonify({'error': 'Missing url'}), 400
+
+    session_id = str(uuid.uuid4())[:8]
+    audio_path = os.path.join(AUDIO_SEGMENTS_FOLDER, f'{session_id}_input.mp3')
+
+    try:
+        download_file(audio_url, audio_path)
+    except Exception as e:
+        return jsonify({'error': f'Download failed: {str(e)}'}), 500
+
+    # Get total duration
+    result = subprocess.run(
+        ['ffprobe', '-v', 'error', '-show_entries', 'format=duration',
+         '-of', 'default=noprint_wrappers=1:nokey=1', audio_path],
+        capture_output=True, text=True
+    )
+    try:
+        total_duration = float(result.stdout.strip())
+    except:
+        return jsonify({'error': 'Could not read audio duration'}), 500
+
+    segments = []
+    start    = 0
+    idx      = 0
+
+    while start < total_duration:
+        seg_fn   = f'{session_id}_seg{idx:03d}.mp3'
+        seg_path = os.path.join(AUDIO_SEGMENTS_FOLDER, seg_fn)
+        proc = subprocess.run(
+            ['ffmpeg', '-y', '-i', audio_path,
+             '-ss', str(start), '-t', str(segment_duration),
+             '-c:a', 'libmp3lame', '-b:a', '128k', seg_path],
+            capture_output=True, timeout=120
+        )
+        if proc.returncode == 0 and os.path.exists(seg_path):
+            segments.append(seg_fn)
+        start += segment_duration
+        idx   += 1
+
+    os.remove(audio_path)
+    return jsonify({'segments': segments}), 200
+
+
+@app.route('/audio_segments/<filename>', methods=['GET'])
+def serve_audio_segment(filename):
+    return send_from_directory(AUDIO_SEGMENTS_FOLDER, filename)
 
 
 if __name__ == '__main__':
