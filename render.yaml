@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: short-video-server
+    runtime: python
+    buildCommand: |
+      pip install -r requirements.txt
+      apt-get update && apt-get install -y ffmpeg fonts-dejavu fonts-liberation fonts-ubuntu fonts-freefont-ttf
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --timeout 3600 --workers 2
+    envVars:
+      - key: PORT
+        value: 10000
+    disk:
+      name: video-jobs
+      mountPath: /tmp
+      sizeGB: 10
