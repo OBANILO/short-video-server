@@ -221,33 +221,25 @@ def build_eq_bar(font):
 def build_subscribe_animation(font):
     alpha     = "if(lt(t,2),0,if(lt(t,3),(t-2),0.85+0.15*abs(sin(3.14159*t))))"
     arr_alpha = "if(lt(t,3),0,0.7+0.3*abs(sin(2.8*t)))"
-    # ✅ ffmpeg uses trunc() not int()
-    arr_y     = "trunc(h*0.22)+36+trunc(6*abs(sin(2.8*t)))"
+    arr_y     = "trunc(h*0.25)+44+trunc(6*abs(sin(2.8*t)))"
 
-    box = (
-        "drawbox=x=200:y=trunc(h*0.22)-34:w=320:h=62:"
-        "color=0xFF1111@1.0:t=fill:"
-        "enable='gte(t,2)'"
-    )
-    white_border = (
-        "drawbox=x=200:y=trunc(h*0.22)-34:w=320:h=62:"
-        "color=white@1.0:t=3:"
-        "enable='gte(t,2)'"
-    )
+    # SUBSCRIBE text only — no box, centered at 25% from top
     sub = (
         f"drawtext=fontfile={font}:text='SUBSCRIBE':"
-        f"fontsize=36:fontcolor=white@1.0:"
-        f"shadowcolor=0x990000@0.8:shadowx=1:shadowy=1:"
-        f"x=(w-text_w)/2:y=trunc(h*0.22)-16:"
+        f"fontsize=40:fontcolor=white@1.0:"
+        f"borderw=3:bordercolor=0xFF1111@1.0:"
+        f"shadowcolor=black@0.9:shadowx=2:shadowy=2:"
+        f"x=(w-text_w)/2:y=trunc(h*0.25)-16:"
         f"alpha='{alpha}'"
     )
     arrow = (
         f"drawtext=fontfile={font}:text='\u25BC  \u25BC':"
-        f"fontsize=20:fontcolor=white@1.0:"
+        f"fontsize=20:fontcolor=0xFF3333@1.0:"
+        f"borderw=1:bordercolor=black@0.8:"
         f"x=(w-text_w)/2:y={arr_y}:"
         f"alpha='{arr_alpha}'"
     )
-    return ",".join([box, white_border, sub, arrow])
+    return ",".join([sub, arrow])
 
 
 # ══════════════════════════════════════════════
@@ -668,8 +660,15 @@ def process_audio():
     if proc.returncode != 0 or not os.path.exists(seg_path):
         return jsonify({'error': 'Segment extraction failed'}), 500
 
+    # ✅ FIX: return base64 audio directly so WordPress doesn't need
+    # to fetch it back from a separate endpoint (avoids 404 on worker restart)
+    import base64
+    with open(seg_path, 'rb') as f:
+        audio_b64 = base64.b64encode(f.read()).decode('utf-8')
+    os.remove(seg_path)
+
     print(f"[ProcessAudio] Best segment: {best_start:.1f}s → {best_start+segment_duration:.1f}s")
-    return jsonify({'segments': [seg_fn]}), 200
+    return jsonify({'segments': [seg_fn], 'audio_b64': audio_b64}), 200
 
 
 @app.route('/audio_segments/<filename>', methods=['GET'])
