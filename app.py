@@ -215,82 +215,55 @@ def build_eq_bar(font):
 
 # ══════════════════════════════════════════════
 # SUBSCRIBE ANIMATION
-# Centered at 80% height — pulse + shake effect
+# Centered at 80% height — high conversion
 # ══════════════════════════════════════════════
 
 def build_subscribe_animation(font):
-    """
-    Animated SUBSCRIBE button at 80% height, centered.
-    - Bell icon + SUBSCRIBE text
-    - Pulses in/out every 2 seconds
-    - Appears after 2s, stays visible throughout
-    - Red background box + white bold text
-    - Arrow pointing down underneath
-    """
-    y_pos = "h*0.80"
+    # Exact position: 22% from top, centered
+    # 720px wide: box width=300, so x=(720-300)/2=210
+    # 1280px tall: 22% = 281px, box_y=281-30=251
 
-    # Alpha: fade in at t=2, then pulse continuously
-    alpha_expr = (
-        "if(lt(t,2),0,"
-        "if(lt(t,3),(t-2)/1.0,"
-        "0.75+0.25*sin(3.14159*t)))"
+    alpha     = "if(lt(t,2),0,if(lt(t,3),(t-2),0.85+0.15*abs(sin(3.14159*t))))"
+    arr_alpha = "if(lt(t,3),0,0.7+0.3*abs(sin(2.8*t)))"
+    arr_y     = "int(h*0.22)+36+int(6*abs(sin(2.8*t)))"
+
+    # Outer dark-red border box (slightly larger)
+    outer = (
+        "drawbox=x=200:y=int(h*0.22)-38:w=320:h=68:"
+        "color=0xCC0000@1.0:t=fill:"
+        "enable='gte(t,2)'"
     )
-
-    # Scale pulse: grows and shrinks rhythmically
-    scale_expr = "1.0+0.08*sin(3.14159*t)"
-
-    # Red background box behind text
-    # We simulate with a colored drawbox
-    box = (
-        f"drawbox="
-        f"x=(w-340)/2:y={y_pos}-14:"
-        f"w=340:h=58:"
-        f"color=0xFF0000@0.88:"
-        f"t=fill:"
-        f"enable='gte(t,2)'"
+    # Inner red fill
+    inner = (
+        "drawbox=x=206:y=int(h*0.22)-32:w=308:h=56:"
+        "color=0xFF1111@1.0:t=fill:"
+        "enable='gte(t,2)'"
     )
-
-    # White border around the box
-    border = (
-        f"drawbox="
-        f"x=(w-340)/2:y={y_pos}-14:"
-        f"w=340:h=58:"
-        f"color=white@0.95:"
-        f"t=3:"
-        f"enable='gte(t,2)'"
+    # White border outline
+    white_border = (
+        "drawbox=x=206:y=int(h*0.22)-32:w=308:h=56:"
+        "color=white@1.0:t=3:"
+        "enable='gte(t,2)'"
     )
-
-    # 🔔 Bell icon
-    bell = (
-        f"drawtext=fontfile={font}:text='\U0001F514':"
-        f"fontsize=32:fontcolor=white@1.0:"
-        f"x=(w-340)/2+14:y={y_pos}-4:"
-        f"alpha='{alpha_expr}'"
-    )
-
-    # SUBSCRIBE text
-    subscribe = (
+    # SUBSCRIBE bold white text centered
+    sub = (
         f"drawtext=fontfile={font}:text='SUBSCRIBE':"
-        f"fontsize=30:fontcolor=white@1.0:"
-        f"borderw=1:bordercolor=black@0.4:"
-        f"x=(w/2)-text_w/2+20:y={y_pos}:"
-        f"alpha='{alpha_expr}'"
+        f"fontsize=36:fontcolor=white@1.0:"
+        f"borderw=0:"
+        f"shadowcolor=0xAA0000@0.6:shadowx=1:shadowy=1:"
+        f"x=(w-text_w)/2:y=int(h*0.22)-18:"
+        f"alpha='{alpha}'"
     )
-
-    # Arrow down below the button — points at subscribe
-    arrow_alpha = (
-        "if(lt(t,3),0,"
-        "0.6+0.4*abs(sin(2.5*t)))"
-    )
+    # Bouncing ▼▼ arrows below button
     arrow = (
-        f"drawtext=fontfile={font}:text='\u25BC':"
-        f"fontsize=28:fontcolor=0xFF4444@1.0:"
-        f"borderw=2:bordercolor=black@0.6:"
-        f"x=(w-text_w)/2:y={y_pos}+52:"
-        f"alpha='{arrow_alpha}'"
+        f"drawtext=fontfile={font}:text='\u25BC  \u25BC':"
+        f"fontsize=20:fontcolor=white@1.0:"
+        f"borderw=1:bordercolor=0xCC0000@0.8:"
+        f"x=(w-text_w)/2:y={arr_y}:"
+        f"alpha='{arr_alpha}'"
     )
 
-    return ",".join([box, border, bell, subscribe, arrow])
+    return ",".join([outer, inner, white_border, sub, arrow])
 
 
 # ══════════════════════════════════════════════
