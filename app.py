@@ -214,6 +214,86 @@ def build_eq_bar(font):
 
 
 # ══════════════════════════════════════════════
+# SUBSCRIBE ANIMATION
+# Centered at 80% height — pulse + shake effect
+# ══════════════════════════════════════════════
+
+def build_subscribe_animation(font):
+    """
+    Animated SUBSCRIBE button at 80% height, centered.
+    - Bell icon + SUBSCRIBE text
+    - Pulses in/out every 2 seconds
+    - Appears after 2s, stays visible throughout
+    - Red background box + white bold text
+    - Arrow pointing down underneath
+    """
+    y_pos = "h*0.80"
+
+    # Alpha: fade in at t=2, then pulse continuously
+    alpha_expr = (
+        "if(lt(t,2),0,"
+        "if(lt(t,3),(t-2)/1.0,"
+        "0.75+0.25*sin(3.14159*t)))"
+    )
+
+    # Scale pulse: grows and shrinks rhythmically
+    scale_expr = "1.0+0.08*sin(3.14159*t)"
+
+    # Red background box behind text
+    # We simulate with a colored drawbox
+    box = (
+        f"drawbox="
+        f"x=(w-340)/2:y={y_pos}-14:"
+        f"w=340:h=58:"
+        f"color=0xFF0000@0.88:"
+        f"t=fill:"
+        f"enable='gte(t,2)'"
+    )
+
+    # White border around the box
+    border = (
+        f"drawbox="
+        f"x=(w-340)/2:y={y_pos}-14:"
+        f"w=340:h=58:"
+        f"color=white@0.95:"
+        f"t=3:"
+        f"enable='gte(t,2)'"
+    )
+
+    # 🔔 Bell icon
+    bell = (
+        f"drawtext=fontfile={font}:text='\U0001F514':"
+        f"fontsize=32:fontcolor=white@1.0:"
+        f"x=(w-340)/2+14:y={y_pos}-4:"
+        f"alpha='{alpha_expr}'"
+    )
+
+    # SUBSCRIBE text
+    subscribe = (
+        f"drawtext=fontfile={font}:text='SUBSCRIBE':"
+        f"fontsize=30:fontcolor=white@1.0:"
+        f"borderw=1:bordercolor=black@0.4:"
+        f"x=(w/2)-text_w/2+20:y={y_pos}:"
+        f"alpha='{alpha_expr}'"
+    )
+
+    # Arrow down below the button — points at subscribe
+    arrow_alpha = (
+        "if(lt(t,3),0,"
+        "0.6+0.4*abs(sin(2.5*t)))"
+    )
+    arrow = (
+        f"drawtext=fontfile={font}:text='\u25BC':"
+        f"fontsize=28:fontcolor=0xFF4444@1.0:"
+        f"borderw=2:bordercolor=black@0.6:"
+        f"x=(w-text_w)/2:y={y_pos}+52:"
+        f"alpha='{arrow_alpha}'"
+    )
+
+    return ",".join([box, border, bell, subscribe, arrow])
+
+
+# ══════════════════════════════════════════════
 # LYRICS / KARAOKE
 # ══════════════════════════════════════════════
 
@@ -390,6 +470,7 @@ def build_ffmpeg_command_short(video_path, audio_path, output_path, audio_durati
     fade_filter   = f"fade=t=in:st=0:d=2,fade=t=out:st={fade_out_st:.2f}:d=3"
     artist_filter = build_artist_watermark(font_italic, artist_name)
     eq_filter     = build_eq_bar(font)
+    subscribe_filter = build_subscribe_animation(font)
 
     vf_parts = [
         scale_crop,
@@ -405,6 +486,7 @@ def build_ffmpeg_command_short(video_path, audio_path, output_path, audio_durati
         if karaoke:
             vf_parts.append(karaoke)
 
+    vf_parts.append(subscribe_filter)  # ✅ subscribe animation at 80%
     vf_parts.append(eq_filter)
     vf_parts.append(fade_filter)
 
