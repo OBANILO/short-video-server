@@ -219,51 +219,35 @@ def build_eq_bar(font):
 # ══════════════════════════════════════════════
 
 def build_subscribe_animation(font):
-    # Exact position: 22% from top, centered
-    # 720px wide: box width=300, so x=(720-300)/2=210
-    # 1280px tall: 22% = 281px, box_y=281-30=251
-
     alpha     = "if(lt(t,2),0,if(lt(t,3),(t-2),0.85+0.15*abs(sin(3.14159*t))))"
     arr_alpha = "if(lt(t,3),0,0.7+0.3*abs(sin(2.8*t)))"
-    arr_y     = "int(h*0.22)+36+int(6*abs(sin(2.8*t)))"
+    # ✅ ffmpeg uses trunc() not int()
+    arr_y     = "trunc(h*0.22)+36+trunc(6*abs(sin(2.8*t)))"
 
-    # Outer dark-red border box (slightly larger)
-    outer = (
-        "drawbox=x=200:y=int(h*0.22)-38:w=320:h=68:"
-        "color=0xCC0000@1.0:t=fill:"
-        "enable='gte(t,2)'"
-    )
-    # Inner red fill
-    inner = (
-        "drawbox=x=206:y=int(h*0.22)-32:w=308:h=56:"
+    box = (
+        "drawbox=x=200:y=trunc(h*0.22)-34:w=320:h=62:"
         "color=0xFF1111@1.0:t=fill:"
         "enable='gte(t,2)'"
     )
-    # White border outline
     white_border = (
-        "drawbox=x=206:y=int(h*0.22)-32:w=308:h=56:"
+        "drawbox=x=200:y=trunc(h*0.22)-34:w=320:h=62:"
         "color=white@1.0:t=3:"
         "enable='gte(t,2)'"
     )
-    # SUBSCRIBE bold white text centered
     sub = (
         f"drawtext=fontfile={font}:text='SUBSCRIBE':"
         f"fontsize=36:fontcolor=white@1.0:"
-        f"borderw=0:"
-        f"shadowcolor=0xAA0000@0.6:shadowx=1:shadowy=1:"
-        f"x=(w-text_w)/2:y=int(h*0.22)-18:"
+        f"shadowcolor=0x990000@0.8:shadowx=1:shadowy=1:"
+        f"x=(w-text_w)/2:y=trunc(h*0.22)-16:"
         f"alpha='{alpha}'"
     )
-    # Bouncing ▼▼ arrows below button
     arrow = (
         f"drawtext=fontfile={font}:text='\u25BC  \u25BC':"
         f"fontsize=20:fontcolor=white@1.0:"
-        f"borderw=1:bordercolor=0xCC0000@0.8:"
         f"x=(w-text_w)/2:y={arr_y}:"
         f"alpha='{arr_alpha}'"
     )
-
-    return ",".join([outer, inner, white_border, sub, arrow])
+    return ",".join([box, white_border, sub, arrow])
 
 
 # ══════════════════════════════════════════════
