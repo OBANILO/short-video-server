@@ -8,6 +8,7 @@ import math
 import uuid
 import json
 import re
+import base64
 
 app = Flask(__name__)
 
@@ -17,17 +18,10 @@ AUDIO_SEGMENTS_FOLDER = '/tmp/audio_segments'
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(AUDIO_SEGMENTS_FOLDER, exist_ok=True)
 
-# ─────────────────────────────────────────────
-# Layout constants (9:16 = 720x1280)
-# ─────────────────────────────────────────────
 EQ_CENTER_Y = 0.92
 DARK_START  = 0.78
 LYRICS_Y    = 0.84
 
-
-# ══════════════════════════════════════════════
-# HELPERS
-# ══════════════════════════════════════════════
 
 def download_file(url, dest_path):
     headers = {'Cache-Control': 'no-cache', 'Pragma': 'no-cache'}
@@ -47,7 +41,10 @@ def get_audio_duration(audio_path):
          '-of', 'default=noprint_wrappers=1:nokey=1', audio_path],
         capture_output=True, text=True
     )
-    return float(result.stdout.strip())
+    out = result.stdout.strip()
+    if not out:
+        raise ValueError(f"ffprobe returned empty for {audio_path}")
+    return float(out)
 
 
 def get_best_font():
@@ -85,47 +82,29 @@ def get_lyrics_font():
     return get_best_font()
 
 
-# ══════════════════════════════════════════════
-# BEST PART DETECTION
-# Analyzes audio volume to find the most
-# energetic/loud segment of the song
-# ══════════════════════════════════════════════
-
 def find_best_segment(audio_path, segment_duration=58):
-    """Find the start time of the most energetic segment using ffmpeg volumedetect."""
     total_duration = get_audio_duration(audio_path)
     if total_duration <= segment_duration:
         return 0.0
 
-    # Sample volume every 2 seconds across the whole track
-    step       = 2.0
-    window     = segment_duration
-    best_start = 0.0
-    best_score = -1.0
-
-    # Use ffmpeg to get RMS volume for each 2s chunk
+    step      = 2.0
+    volumes   = []
     num_chunks = int(total_duration / step)
-    volumes    = []
 
     for i in range(num_chunks):
         t = i * step
         result = subprocess.run([
             'ffmpeg', '-y', '-ss', str(t), '-t', str(step),
-            '-i', audio_path,
-            '-af', 'volumedetect',
+            '-i', audio_path, '-af', 'volumedetect',
             '-f', 'null', '/dev/null'
         ], capture_output=True, text=True, timeout=10)
-
-        # Parse mean_volume from stderr
         match = re.search(r'mean_volume:\s*([-\d.]+)\s*dB', result.stderr)
-        vol   = float(match.group(1)) if match else -60.0
-        volumes.append(vol)
+        volumes.append(float(match.group(1)) if match else -60.0)
 
     if not volumes:
         return 0.0
 
-    # Slide a window of (segment_duration / step) chunks and find max average volume
-    window_chunks = int(window / step)
+    window_chunks = int(segment_duration / step)
     best_start    = 0.0
     best_score    = -999.0
 
@@ -139,10 +118,6 @@ def find_best_segment(audio_path, segment_duration=58):
     return best_start
 
 
-# ══════════════════════════════════════════════
-# FFMPEG ESCAPE
-# ══════════════════════════════════════════════
-
 def ffmpeg_escape(text):
     text = text.replace('\\', '\\\\')
     text = text.replace("'", "\u2019")
@@ -153,10 +128,6 @@ def ffmpeg_escape(text):
     text = text.replace(',', '\\,')
     return text
 
-
-# ══════════════════════════════════════════════
-# ARTIST WATERMARK
-# ══════════════════════════════════════════════
 
 def build_artist_watermark(font_italic, artist_name="SORLUNE"):
     name       = ffmpeg_escape(artist_name.upper())
@@ -176,10 +147,6 @@ def build_artist_watermark(font_italic, artist_name="SORLUNE"):
     )
     return ",".join([watermark, underline])
 
-
-# ══════════════════════════════════════════════
-# EQ BAR
-# ══════════════════════════════════════════════
 
 def build_eq_bar(font):
     parts     = []
@@ -201,7 +168,6 @@ def build_eq_bar(font):
         offset    = (i - half) * bar_gap
         bar_x     = f"(w/2+({offset})-tw/2)"
         fs_expr   = f"3+{amplitude}*abs(sin(t*{freqs[i]}+{phases[i]}))"
-
         parts.append(
             f"drawtext=fontfile={font}:text='|':fontsize={fs_expr}:"
             f"fontcolor=0xD4AF37@{alpha_up:.2f}:x={bar_x}:y=({center_y})-text_h"
@@ -213,17 +179,11 @@ def build_eq_bar(font):
     return ",".join(parts)
 
 
-# ══════════════════════════════════════════════
-# SUBSCRIBE ANIMATION
-# Centered at 80% height — high conversion
-# ══════════════════════════════════════════════
-
 def build_subscribe_animation(font):
     alpha     = "if(lt(t,2),0,if(lt(t,3),(t-2),0.85+0.15*abs(sin(3.14159*t))))"
     arr_alpha = "if(lt(t,3),0,0.7+0.3*abs(sin(2.8*t)))"
     arr_y     = "trunc(h*0.25)+44+trunc(6*abs(sin(2.8*t)))"
 
-    # SUBSCRIBE text only — no box, centered at 25% from top
     sub = (
         f"drawtext=fontfile={font}:text='SUBSCRIBE':"
         f"fontsize=40:fontcolor=white@1.0:"
@@ -241,10 +201,6 @@ def build_subscribe_animation(font):
     )
     return ",".join([sub, arrow])
 
-
-# ══════════════════════════════════════════════
-# LYRICS / KARAOKE
-# ══════════════════════════════════════════════
 
 _SECTION_WORDS = r'verse|chorus|bridge|hook|outro|intro|pre[\-\s]?chorus|post[\-\s]?chorus|refrain|interlude|instrumental|spoken|rap|breakdown|solo|ad[\-\s]?lib|vamp|coda|tag|skit|fade'
 SECTION_REGEX  = [re.compile(p, re.IGNORECASE) for p in [
@@ -390,62 +346,46 @@ def build_karaoke_filter(segments, font, lyrics_font=None):
     return ",".join(parts)
 
 
-# ══════════════════════════════════════════════
-# FFMPEG COMMAND — short video 720x1280
-# ══════════════════════════════════════════════
-
 def build_ffmpeg_command_short(video_path, audio_path, output_path, audio_duration,
                                 font, font_italic, lyrics_font=None,
                                 lyrics_segments=None, artist_name="SORLUNE"):
     fade_out_st = max(audio_duration - 3, audio_duration * 0.85)
 
-    # 720x1280 (9:16) — memory efficient
     scale_crop = (
         "scale=720:1280:force_original_aspect_ratio=increase,"
         "crop=720:1280"
     )
-
     grade_filter = (
         "eq=brightness=0.02:contrast=1.03:saturation=1.05,"
         "curves=r='0/0 0.5/0.53 1/1':g='0/0 0.5/0.48 1/0.95':b='0/0 0.5/0.43 1/0.86'"
     )
-
     dark_overlay = (
         f"drawtext=fontfile={font}:text=' ':fontsize=1:fontcolor=black@0:"
         f"box=1:boxcolor=black@0.60:boxborderw=0:"
         f"x=0:y=h*{DARK_START}:fix_bounds=1"
     )
 
-    fade_filter   = f"fade=t=in:st=0:d=2,fade=t=out:st={fade_out_st:.2f}:d=3"
-    artist_filter = build_artist_watermark(font_italic, artist_name)
-    eq_filter     = build_eq_bar(font)
+    fade_filter      = f"fade=t=in:st=0:d=2,fade=t=out:st={fade_out_st:.2f}:d=3"
+    artist_filter    = build_artist_watermark(font_italic, artist_name)
+    eq_filter        = build_eq_bar(font)
     subscribe_filter = build_subscribe_animation(font)
 
-    vf_parts = [
-        scale_crop,
-        grade_filter,
-        "format=yuv420p",
-        dark_overlay,
-        artist_filter,
-    ]
+    vf_parts = [scale_crop, grade_filter, "format=yuv420p", dark_overlay, artist_filter]
 
-    # Add karaoke if lyrics available
     if lyrics_segments:
         karaoke = build_karaoke_filter(lyrics_segments, font, lyrics_font=lyrics_font)
         if karaoke:
             vf_parts.append(karaoke)
 
-    vf_parts.append(subscribe_filter)  # ✅ subscribe animation at 80%
+    vf_parts.append(subscribe_filter)
     vf_parts.append(eq_filter)
     vf_parts.append(fade_filter)
-
-    vf_chain = ",".join(vf_parts)
 
     return [
         'ffmpeg', '-y',
         '-stream_loop', '-1', '-i', video_path,
         '-i', audio_path,
-        '-vf', vf_chain,
+        '-vf', ",".join(vf_parts),
         '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '26',
         '-threads', '1',
         '-c:a', 'aac', '-b:a', '128k',
@@ -455,10 +395,6 @@ def build_ffmpeg_command_short(video_path, audio_path, output_path, audio_durati
         output_path
     ]
 
-
-# ══════════════════════════════════════════════
-# JOB RUNNER
-# ══════════════════════════════════════════════
 
 def generate_short_job(job_id, video_path, audio_path, output_path,
                        lyrics_segments=None, artist_name="SORLUNE"):
@@ -481,8 +417,29 @@ def generate_short_job(job_id, video_path, audio_path, output_path,
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
 
         if proc.returncode == 0 and os.path.exists(output_path):
+            # ✅ FIX: upload video directly to WordPress — avoids 404 cross-worker issue on Render
+            wp_video_url  = None
+            wp_upload_url = jobs[job_id].get('wp_upload_url', '')
+            wp_secret     = jobs[job_id].get('wp_secret', '')
+            if wp_upload_url and wp_secret:
+                try:
+                    with open(output_path, 'rb') as vf:
+                        up = requests.post(
+                            wp_upload_url,
+                            files={'video': (f'{job_id}.mp4', vf, 'video/mp4')},
+                            data={'secret': wp_secret},
+                            timeout=300
+                        )
+                    if up.status_code == 200:
+                        wp_video_url = up.json().get('url')
+                        print(f"[Upload] Uploaded to WP: {wp_video_url}")
+                    else:
+                        print(f"[Upload] WP upload failed: {up.status_code} {up.text[:200]}")
+                except Exception as ue:
+                    print(f"[Upload] Exception: {ue}")
+
             jobs[job_id]['status']    = 'completed'
-            jobs[job_id]['video_url'] = f"/videos/{job_id}/{job_id}.mp4"
+            jobs[job_id]['video_url'] = wp_video_url or f"/videos/{job_id}/{job_id}.mp4"
             print(f"[FFmpeg] Job {job_id} completed")
         else:
             jobs[job_id]['status'] = 'error'
@@ -495,22 +452,20 @@ def generate_short_job(job_id, video_path, audio_path, output_path,
         print(f"[Job ERROR] {job_id}: {e}")
 
 
-# ══════════════════════════════════════════════
-# ROUTES
-# ══════════════════════════════════════════════
-
 @app.route('/generate', methods=['POST'])
 def generate_video():
     data = request.get_json()
     if not data:
         return jsonify({'error': 'No JSON data'}), 400
 
-    audio_url   = data.get('audio_url')
-    video_url   = data.get('video_url')
-    api_key     = data.get('api_key', 'default')
-    lyrics_text = data.get('lyrics', '').strip()
-    openai_key  = data.get('openai_key', '').strip()
-    artist_name = data.get('artist', 'SORLUNE').strip()
+    audio_url     = data.get('audio_url')
+    video_url     = data.get('video_url')
+    api_key       = data.get('api_key', 'default')
+    lyrics_text   = data.get('lyrics', '').strip()
+    openai_key    = data.get('openai_key', '').strip()
+    artist_name   = data.get('artist', 'SORLUNE').strip()
+    wp_upload_url = data.get('wp_upload_url', '')
+    wp_secret     = data.get('wp_secret', '')
 
     if not audio_url or not video_url:
         return jsonify({'error': 'Missing audio_url or video_url'}), 400
@@ -523,7 +478,10 @@ def generate_video():
     audio_path  = os.path.join(job_folder, 'audio.mp3')
     output_path = os.path.join(job_folder, f'{job_id}.mp4')
 
-    jobs[job_id] = {'status': 'pending', 'video_url': None}
+    jobs[job_id] = {
+        'status': 'pending', 'video_url': None,
+        'wp_upload_url': wp_upload_url, 'wp_secret': wp_secret
+    }
 
     def run():
         try:
@@ -534,7 +492,6 @@ def generate_video():
             download_file(video_url, video_path)
             download_file(audio_url, audio_path)
 
-            # Transcribe lyrics with Whisper if key provided
             lyrics_segments = []
             if openai_key:
                 try:
@@ -543,9 +500,7 @@ def generate_video():
                     print(f"[Lyrics] Got {len(lyrics_segments)} segments from Whisper")
                 except Exception as e:
                     print(f"[Lyrics] Whisper failed: {e}")
-                    lyrics_segments = []
 
-            # Fallback: use raw lyrics text with time estimation
             if not lyrics_segments and lyrics_text:
                 duration = get_audio_duration(audio_path)
                 lines    = split_lyrics_lines(lyrics_text)
@@ -582,7 +537,11 @@ def check_status(api_key):
         return jsonify({'status': 'not_found'}), 200
     response = {'status': job['status']}
     if job['status'] == 'completed':
-        response['video_url'] = request.host_url.rstrip('/') + f'/videos/{api_key}/{api_key}.mp4'
+        url = job.get('video_url', '')
+        if url.startswith('http'):
+            response['video_url'] = url
+        else:
+            response['video_url'] = request.host_url.rstrip('/') + url
     if job.get('error'):
         response['error'] = job['error']
     return jsonify(response), 200
@@ -611,10 +570,6 @@ def health():
     return jsonify({'status': 'ok', 'message': 'Short video server running'}), 200
 
 
-# ══════════════════════════════════════════════
-# PROCESS AUDIO — find best energetic segment
-# ══════════════════════════════════════════════
-
 @app.route('/process-audio', methods=['POST'])
 def process_audio():
     data = request.get_json()
@@ -637,22 +592,19 @@ def process_audio():
 
     try:
         total_duration = get_audio_duration(audio_path)
-    except:
-        return jsonify({'error': 'Could not read audio duration'}), 500
+    except Exception as e:
+        if os.path.exists(audio_path): os.remove(audio_path)
+        return jsonify({'error': f'Could not read audio duration: {str(e)}'}), 500
 
-    # Find the best (most energetic) part
     best_start = find_best_segment(audio_path, segment_duration)
 
-    # Cut only that one best segment
     seg_fn   = f'{session_id}_seg000.mp3'
     seg_path = os.path.join(AUDIO_SEGMENTS_FOLDER, seg_fn)
 
     proc = subprocess.run([
         'ffmpeg', '-y', '-i', audio_path,
-        '-ss', str(best_start),
-        '-t', str(segment_duration),
-        '-c:a', 'libmp3lame', '-b:a', '128k',
-        seg_path
+        '-ss', str(best_start), '-t', str(segment_duration),
+        '-c:a', 'libmp3lame', '-b:a', '128k', seg_path
     ], capture_output=True, timeout=120)
 
     os.remove(audio_path)
@@ -660,14 +612,12 @@ def process_audio():
     if proc.returncode != 0 or not os.path.exists(seg_path):
         return jsonify({'error': 'Segment extraction failed'}), 500
 
-    # ✅ FIX: return base64 audio directly so WordPress doesn't need
-    # to fetch it back from a separate endpoint (avoids 404 on worker restart)
-    import base64
+    # ✅ Return base64 directly — no separate download needed, avoids 404 on worker restart
     with open(seg_path, 'rb') as f:
         audio_b64 = base64.b64encode(f.read()).decode('utf-8')
     os.remove(seg_path)
 
-    print(f"[ProcessAudio] Best segment: {best_start:.1f}s → {best_start+segment_duration:.1f}s")
+    print(f"[ProcessAudio] Best segment: {best_start:.1f}s -> {best_start+segment_duration:.1f}s")
     return jsonify({'segments': [seg_fn], 'audio_b64': audio_b64}), 200
 
 
