@@ -12,60 +12,15 @@ import base64
 
 app = Flask(__name__)
 
-# ✅ FIX: file-based job storage — shared across ALL Render workers
+jobs = {}
 UPLOAD_FOLDER = '/tmp/video_jobs'
 AUDIO_SEGMENTS_FOLDER = '/tmp/audio_segments'
-JOBS_FILE = '/tmp/jobs_state.json'
-jobs_lock = threading.Lock()
-
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(AUDIO_SEGMENTS_FOLDER, exist_ok=True)
 
 EQ_CENTER_Y = 0.92
 DARK_START  = 0.78
 LYRICS_Y    = 0.84
-
-
-def load_jobs():
-    try:
-        if os.path.exists(JOBS_FILE):
-            with open(JOBS_FILE, 'r') as f:
-                return json.load(f)
-    except Exception:
-        pass
-    return {}
-
-def save_jobs(jobs):
-    try:
-        with open(JOBS_FILE, 'w') as f:
-            json.dump(jobs, f)
-    except Exception as e:
-        print(f"[Jobs] Save error: {e}")
-
-def get_job(job_id):
-    with jobs_lock:
-        return load_jobs().get(job_id)
-
-def set_job(job_id, data):
-    with jobs_lock:
-        jobs = load_jobs()
-        jobs[job_id] = data
-        save_jobs(jobs)
-
-def update_job(job_id, updates):
-    with jobs_lock:
-        jobs = load_jobs()
-        if job_id in jobs:
-            jobs[job_id].update(updates)
-        else:
-            jobs[job_id] = updates
-        save_jobs(jobs)
-
-def delete_job(job_id):
-    with jobs_lock:
-        jobs = load_jobs()
-        jobs.pop(job_id, None)
-        save_jobs(jobs)
 
 
 def download_file(url, dest_path):
@@ -131,9 +86,11 @@ def find_best_segment(audio_path, segment_duration=58):
     total_duration = get_audio_duration(audio_path)
     if total_duration <= segment_duration:
         return 0.0
-    step       = 2.0
-    volumes    = []
+
+    step      = 2.0
+    volumes   = []
     num_chunks = int(total_duration / step)
+
     for i in range(num_chunks):
         t = i * step
         result = subprocess.run([
@@ -143,16 +100,20 @@ def find_best_segment(audio_path, segment_duration=58):
         ], capture_output=True, text=True, timeout=10)
         match = re.search(r'mean_volume:\s*([-\d.]+)\s*dB', result.stderr)
         volumes.append(float(match.group(1)) if match else -60.0)
+
     if not volumes:
         return 0.0
+
     window_chunks = int(segment_duration / step)
     best_start    = 0.0
     best_score    = -999.0
+
     for i in range(len(volumes) - window_chunks + 1):
         score = sum(volumes[i:i + window_chunks]) / window_chunks
         if score > best_score:
             best_score = score
             best_start = i * step
+
     print(f"[BestSegment] start={best_start:.1f}s score={best_score:.1f}dB total={total_duration:.1f}s")
     return best_start
 
@@ -193,10 +154,12 @@ def build_eq_bar(font):
     bar_gap   = 12
     half      = bar_count // 2
     center_y  = f"h*{EQ_CENTER_Y}"
+
     freqs  = [1.3,2.1,2.7,1.9,3.1,2.4,1.7,2.9,2.2,3.5,2.0,2.8,
               2.8,2.0,3.5,2.2,2.9,1.7,2.4,3.1,1.9,2.7,2.1,1.3]
     phases = [0.0,0.5,1.1,1.7,0.3,0.9,1.5,0.2,0.8,1.4,0.6,1.2,
               1.2,0.6,1.4,0.8,0.2,1.5,0.9,0.3,1.7,1.1,0.5,0.0]
+
     for i in range(bar_count):
         dist      = abs(i - half) / half
         amplitude = int(4 + 28 * math.exp(-2.5 * dist * dist))
@@ -220,6 +183,7 @@ def build_subscribe_animation(font):
     alpha     = "if(lt(t,2),0,if(lt(t,3),(t-2),0.85+0.15*abs(sin(3.14159*t))))"
     arr_alpha = "if(lt(t,3),0,0.7+0.3*abs(sin(2.8*t)))"
     arr_y     = "trunc(h*0.25)+44+trunc(6*abs(sin(2.8*t)))"
+
     sub = (
         f"drawtext=fontfile={font}:text='SUBSCRIBE':"
         f"fontsize=40:fontcolor=white@1.0:"
@@ -297,10 +261,12 @@ def build_lines_from_words(words, max_gap=0.45, max_words=6, max_duration=3.0):
     if not words: return []
     lines   = []
     current = [words[0]]
+
     def flush(lw):
         if not lw: return None
         text = " ".join(w["word"] for w in lw).strip()
         return {"start": round(lw[0]["start"], 2), "end": round(lw[-1]["end"], 2), "text": text} if text else None
+
     for w in words[1:]:
         prev = current[-1]
         if (w["start"] - prev["end"] > max_gap or
@@ -313,6 +279,7 @@ def build_lines_from_words(words, max_gap=0.45, max_words=6, max_duration=3.0):
             current.append(w)
     item = flush(current)
     if item: lines.append(item)
+
     cleaned = []
     for seg in lines:
         start = float(seg["start"]); end = float(seg["end"]); text = seg["text"].strip()
@@ -347,6 +314,7 @@ def build_karaoke_filter(segments, font, lyrics_font=None):
     FONT_SIZE   = 36
     LINE_HEIGHT = 44
     MAX_CHARS   = 32
+
     for seg in segments:
         start, end, raw_text = seg["start"], seg["end"], seg["text"]
         dur       = max(end - start, 0.5)
@@ -382,6 +350,7 @@ def build_ffmpeg_command_short(video_path, audio_path, output_path, audio_durati
                                 font, font_italic, lyrics_font=None,
                                 lyrics_segments=None, artist_name="SORLUNE"):
     fade_out_st = max(audio_duration - 3, audio_duration * 0.85)
+
     scale_crop = (
         "scale=720:1280:force_original_aspect_ratio=increase,"
         "crop=720:1280"
@@ -395,18 +364,23 @@ def build_ffmpeg_command_short(video_path, audio_path, output_path, audio_durati
         f"box=1:boxcolor=black@0.60:boxborderw=0:"
         f"x=0:y=h*{DARK_START}:fix_bounds=1"
     )
+
     fade_filter      = f"fade=t=in:st=0:d=2,fade=t=out:st={fade_out_st:.2f}:d=3"
     artist_filter    = build_artist_watermark(font_italic, artist_name)
     eq_filter        = build_eq_bar(font)
     subscribe_filter = build_subscribe_animation(font)
+
     vf_parts = [scale_crop, grade_filter, "format=yuv420p", dark_overlay, artist_filter]
+
     if lyrics_segments:
         karaoke = build_karaoke_filter(lyrics_segments, font, lyrics_font=lyrics_font)
         if karaoke:
             vf_parts.append(karaoke)
+
     vf_parts.append(subscribe_filter)
     vf_parts.append(eq_filter)
     vf_parts.append(fade_filter)
+
     return [
         'ffmpeg', '-y',
         '-stream_loop', '-1', '-i', video_path,
@@ -425,11 +399,12 @@ def build_ffmpeg_command_short(video_path, audio_path, output_path, audio_durati
 def generate_short_job(job_id, video_path, audio_path, output_path,
                        lyrics_segments=None, artist_name="SORLUNE"):
     try:
-        update_job(job_id, {'status': 'processing'})
+        jobs[job_id]['status'] = 'processing'
         audio_duration = get_audio_duration(audio_path)
         font           = get_best_font()
         font_italic    = get_italic_font()
         lyrics_font    = get_lyrics_font()
+
         cmd = build_ffmpeg_command_short(
             video_path, audio_path, output_path,
             audio_duration, font, font_italic,
@@ -437,13 +412,15 @@ def generate_short_job(job_id, video_path, audio_path, output_path,
             lyrics_segments=lyrics_segments,
             artist_name=artist_name
         )
+
         print(f"[FFmpeg] Starting short job: {job_id}")
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
+
         if proc.returncode == 0 and os.path.exists(output_path):
-            job           = get_job(job_id)
+            # ✅ FIX: upload video directly to WordPress — avoids 404 cross-worker issue on Render
             wp_video_url  = None
-            wp_upload_url = job.get('wp_upload_url', '') if job else ''
-            wp_secret     = job.get('wp_secret', '') if job else ''
+            wp_upload_url = jobs[job_id].get('wp_upload_url', '')
+            wp_secret     = jobs[job_id].get('wp_secret', '')
             if wp_upload_url and wp_secret:
                 try:
                     with open(output_path, 'rb') as vf:
@@ -460,16 +437,18 @@ def generate_short_job(job_id, video_path, audio_path, output_path,
                         print(f"[Upload] WP upload failed: {up.status_code} {up.text[:200]}")
                 except Exception as ue:
                     print(f"[Upload] Exception: {ue}")
-            update_job(job_id, {
-                'status': 'completed',
-                'video_url': wp_video_url or f"/videos/{job_id}/{job_id}.mp4"
-            })
+
+            jobs[job_id]['status']    = 'completed'
+            jobs[job_id]['video_url'] = wp_video_url or f"/videos/{job_id}/{job_id}.mp4"
             print(f"[FFmpeg] Job {job_id} completed")
         else:
-            update_job(job_id, {'status': 'error', 'error': proc.stderr[-3000:]})
+            jobs[job_id]['status'] = 'error'
+            jobs[job_id]['error']  = proc.stderr[-3000:]
             print(f"[FFmpeg ERROR]\n{proc.stderr[-3000:]}")
+
     except Exception as e:
-        update_job(job_id, {'status': 'error', 'error': str(e)})
+        jobs[job_id]['status'] = 'error'
+        jobs[job_id]['error']  = str(e)
         print(f"[Job ERROR] {job_id}: {e}")
 
 
@@ -478,8 +457,8 @@ def generate_video():
     data = request.get_json()
     if not data:
         return jsonify({'error': 'No JSON data'}), 400
+
     audio_url     = data.get('audio_url')
-    audio_b64     = data.get('audio_b64', '')
     video_url     = data.get('video_url')
     api_key       = data.get('api_key', 'default')
     lyrics_text   = data.get('lyrics', '').strip()
@@ -487,42 +466,41 @@ def generate_video():
     artist_name   = data.get('artist', 'SORLUNE').strip()
     wp_upload_url = data.get('wp_upload_url', '')
     wp_secret     = data.get('wp_secret', '')
-    if not video_url:
-        return jsonify({'error': 'Missing video_url'}), 400
-    if not audio_url and not audio_b64:
-        return jsonify({'error': 'Missing audio_url or audio_b64'}), 400
+
+    if not audio_url or not video_url:
+        return jsonify({'error': 'Missing audio_url or video_url'}), 400
+
     job_id     = api_key
     job_folder = os.path.join(UPLOAD_FOLDER, job_id)
     os.makedirs(job_folder, exist_ok=True)
+
     video_path  = os.path.join(job_folder, 'videoinput.mp4')
     audio_path  = os.path.join(job_folder, 'audio.mp3')
     output_path = os.path.join(job_folder, f'{job_id}.mp4')
-    # ✅ Save to file immediately — visible to ALL workers
-    set_job(job_id, {
+
+    jobs[job_id] = {
         'status': 'pending', 'video_url': None,
         'wp_upload_url': wp_upload_url, 'wp_secret': wp_secret
-    })
+    }
+
     def run():
         try:
             for f in [video_path, audio_path, output_path]:
                 if os.path.exists(f): os.remove(f)
-            update_job(job_id, {'status': 'downloading_assets'})
+
+            jobs[job_id]['status'] = 'downloading_assets'
             download_file(video_url, video_path)
-            # ✅ Use audio_b64 if provided, else download from URL
-            if audio_b64:
-                with open(audio_path, 'wb') as af:
-                    af.write(base64.b64decode(audio_b64))
-                print(f"[Audio] Saved from base64, size={os.path.getsize(audio_path)}")
-            else:
-                download_file(audio_url, audio_path)
+            download_file(audio_url, audio_path)
+
             lyrics_segments = []
             if openai_key:
                 try:
-                    update_job(job_id, {'status': 'transcribing_lyrics'})
+                    jobs[job_id]['status'] = 'transcribing_lyrics'
                     lyrics_segments = transcribe_lyrics_with_whisper(audio_path, openai_key, lyrics_text)
                     print(f"[Lyrics] Got {len(lyrics_segments)} segments from Whisper")
                 except Exception as e:
                     print(f"[Lyrics] Whisper failed: {e}")
+
             if not lyrics_segments and lyrics_text:
                 duration = get_audio_duration(audio_path)
                 lines    = split_lyrics_lines(lyrics_text)
@@ -536,30 +514,33 @@ def generate_video():
                             "text":  line
                         })
                         current += step
+
             generate_short_job(
                 job_id, video_path, audio_path, output_path,
                 lyrics_segments=lyrics_segments,
                 artist_name=artist_name
             )
+
         except Exception as e:
-            update_job(job_id, {'status': 'error', 'error': str(e)})
+            jobs[job_id]['status'] = 'error'
+            jobs[job_id]['error']  = str(e)
             print(f"[Run ERROR] {job_id}: {e}")
+
     threading.Thread(target=run, daemon=True).start()
     return jsonify({'status': 'started', 'job_id': job_id}), 200
 
 
 @app.route('/status/<api_key>', methods=['GET'])
 def check_status(api_key):
-    # ✅ Read from file — works across ALL Render workers
-    job = get_job(api_key)
+    job = jobs.get(api_key)
     if not job:
         return jsonify({'status': 'not_found'}), 200
     response = {'status': job['status']}
     if job['status'] == 'completed':
         url = job.get('video_url', '')
-        if url and url.startswith('http'):
+        if url.startswith('http'):
             response['video_url'] = url
-        elif url:
+        else:
             response['video_url'] = request.host_url.rstrip('/') + url
     if job.get('error'):
         response['error'] = job['error']
@@ -576,7 +557,7 @@ def clear_cache():
     data    = request.get_json()
     api_key = data.get('api_key') if data else None
     if api_key:
-        delete_job(api_key)
+        jobs.pop(api_key, None)
         import shutil
         job_folder = os.path.join(UPLOAD_FOLDER, api_key)
         if os.path.exists(job_folder):
@@ -594,35 +575,48 @@ def process_audio():
     data = request.get_json()
     if not data:
         return jsonify({'error': 'No JSON data'}), 400
+
     audio_url        = data.get('url')
     segment_duration = int(data.get('segment_duration', 58))
+
     if not audio_url:
         return jsonify({'error': 'Missing url'}), 400
+
     session_id = str(uuid.uuid4())[:8]
     audio_path = os.path.join(AUDIO_SEGMENTS_FOLDER, f'{session_id}_input.mp3')
+
     try:
         download_file(audio_url, audio_path)
     except Exception as e:
         return jsonify({'error': f'Download failed: {str(e)}'}), 500
+
     try:
         total_duration = get_audio_duration(audio_path)
     except Exception as e:
         if os.path.exists(audio_path): os.remove(audio_path)
         return jsonify({'error': f'Could not read audio duration: {str(e)}'}), 500
+
     best_start = find_best_segment(audio_path, segment_duration)
+
     seg_fn   = f'{session_id}_seg000.mp3'
     seg_path = os.path.join(AUDIO_SEGMENTS_FOLDER, seg_fn)
+
     proc = subprocess.run([
         'ffmpeg', '-y', '-i', audio_path,
         '-ss', str(best_start), '-t', str(segment_duration),
         '-c:a', 'libmp3lame', '-b:a', '128k', seg_path
     ], capture_output=True, timeout=120)
+
     os.remove(audio_path)
+
     if proc.returncode != 0 or not os.path.exists(seg_path):
         return jsonify({'error': 'Segment extraction failed'}), 500
+
+    # ✅ Return base64 directly — no separate download needed, avoids 404 on worker restart
     with open(seg_path, 'rb') as f:
         audio_b64 = base64.b64encode(f.read()).decode('utf-8')
     os.remove(seg_path)
+
     print(f"[ProcessAudio] Best segment: {best_start:.1f}s -> {best_start+segment_duration:.1f}s")
     return jsonify({'segments': [seg_fn], 'audio_b64': audio_b64}), 200
 
