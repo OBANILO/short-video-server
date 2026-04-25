@@ -497,7 +497,12 @@ def generate_video():
 
             jobs[job_id]['status'] = 'downloading_assets'
             download_file(video_url, video_path)
-            download_file(audio_url, audio_path)
+            audio_b64 = data.get('audio_b64', '')
+if audio_b64:
+    with open(audio_path, 'wb') as f:
+        f.write(base64.b64decode(audio_b64))
+else:
+    download_file(audio_url, audio_path)
 
             lyrics_segments = []
             if openai_key:
