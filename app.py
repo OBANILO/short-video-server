@@ -24,10 +24,17 @@ LYRICS_Y    = 0.84
 
 
 def download_file(url, dest_path):
-    headers = {'Cache-Control': 'no-cache', 'Pragma': 'no-cache'}
-    r = requests.get(f"{url}?nocache={int(time.time())}", timeout=120, stream=True, headers=headers)
+    headers = {
+        'Cache-Control': 'no-cache',
+        'Pragma': 'no-cache',
+        'User-Agent': 'Mozilla/5.0 (compatible; VideoServer/1.0)'
+    }
+    r = requests.get(url, timeout=120, stream=True, headers=headers)
     if r.status_code != 200:
-        r = requests.get(url, timeout=120, stream=True)
+        raise ValueError(f"Download failed: HTTP {r.status_code} for {url}")
+    content_type = r.headers.get('content-type', '')
+    if 'text/html' in content_type:
+        raise ValueError(f"Got HTML instead of file from {url}")
     r.raise_for_status()
     with open(dest_path, 'wb') as f:
         for chunk in r.iter_content(chunk_size=8192):
