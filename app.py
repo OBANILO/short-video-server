@@ -424,7 +424,6 @@ def generate_short_job(job_id, video_path, audio_path, output_path,
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
 
         if proc.returncode == 0 and os.path.exists(output_path):
-            # ✅ FIX: upload video directly to WordPress — avoids 404 cross-worker issue on Render
             wp_video_url  = None
             wp_upload_url = jobs[job_id].get('wp_upload_url', '')
             wp_secret     = jobs[job_id].get('wp_secret', '')
@@ -466,6 +465,7 @@ def generate_video():
         return jsonify({'error': 'No JSON data'}), 400
 
     audio_url     = data.get('audio_url')
+    audio_b64     = data.get('audio_b64', '')
     video_url     = data.get('video_url')
     api_key       = data.get('api_key', 'default')
     lyrics_text   = data.get('lyrics', '').strip()
@@ -474,8 +474,8 @@ def generate_video():
     wp_upload_url = data.get('wp_upload_url', '')
     wp_secret     = data.get('wp_secret', '')
 
-    if not audio_url or not video_url:
-        return jsonify({'error': 'Missing audio_url or video_url'}), 400
+    if not video_url or (not audio_url and not audio_b64):
+        return jsonify({'error': 'Missing audio or video'}), 400
 
     job_id     = api_key
     job_folder = os.path.join(UPLOAD_FOLDER, job_id)
@@ -496,13 +496,22 @@ def generate_video():
                 if os.path.exists(f): os.remove(f)
 
             jobs[job_id]['status'] = 'downloading_assets'
+
+            # ✅ Download video from URL
             download_file(video_url, video_path)
-            audio_b64 = data.get('audio_b64', '')
-if audio_b64:
-    with open(audio_path, 'wb') as f:
-        f.write(base64.b64decode(audio_b64))
-else:
-    download_file(audio_url, audio_path)
+
+            # ✅ Audio: use base64 if provided, otherwise download from URL
+            if audio_b64:
+                print(f"[Audio] Using base64 audio ({len(audio_b64)} chars)")
+                with open(audio_path, 'wb') as f:
+                    f.write(base64.b64decode(audio_b64))
+            else:
+                print(f"[Audio] Downloading from URL: {audio_url}")
+                download_file(audio_url, audio_path)
+
+            # ✅ Verify audio file
+            if not os.path.exists(audio_path) or os.path.getsize(audio_path) < 1000:
+                raise ValueError(f"Audio file missing or too small: {audio_path}")
 
             lyrics_segments = []
             if openai_key:
@@ -624,7 +633,6 @@ def process_audio():
     if proc.returncode != 0 or not os.path.exists(seg_path):
         return jsonify({'error': 'Segment extraction failed'}), 500
 
-    # ✅ Return base64 directly — no separate download needed, avoids 404 on worker restart
     with open(seg_path, 'rb') as f:
         audio_b64 = base64.b64encode(f.read()).decode('utf-8')
     os.remove(seg_path)
