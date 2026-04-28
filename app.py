@@ -512,6 +512,26 @@ def generate_video():
             # ✅ Verify audio file
             if not os.path.exists(audio_path) or os.path.getsize(audio_path) < 1000:
                 raise ValueError(f"Audio file missing or too small: {audio_path}")
+                # ✅ Cut best 58s part from full audio
+segment_duration = 58
+best_start = find_best_segment(audio_path, segment_duration)
+
+seg_audio_path = os.path.join(job_folder, 'audio_best.mp3')
+
+proc = subprocess.run([
+    'ffmpeg', '-y',
+    '-ss', str(best_start),
+    '-i', audio_path,
+    '-t', str(segment_duration),
+    '-c:a', 'libmp3lame',
+    '-b:a', '128k',
+    seg_audio_path
+], capture_output=True, text=True, timeout=300)
+
+if proc.returncode != 0 or not os.path.exists(seg_audio_path) or os.path.getsize(seg_audio_path) < 1000:
+    raise ValueError("Best audio segment extraction failed")
+
+audio_path = seg_audio_path
 
             lyrics_segments = []
             if openai_key:
