@@ -536,30 +536,8 @@ def generate_video():
                 download_file(audio_url, audio_path)
 
             # âœ… Verify audio file
-            # Verify audio file
-if not os.path.exists(audio_path) or os.path.getsize(audio_path) < 1000:
-    raise ValueError(f"Audio file missing or too small: {audio_path}")
-
-# ✅ CUT BEST 58s PART (CORRECT PLACE)
-segment_duration = 58
-best_start = find_best_segment(audio_path, segment_duration)
-
-seg_audio_path = os.path.join(job_folder, 'audio_best.mp3')
-
-proc = subprocess.run([
-    'ffmpeg', '-y',
-    '-ss', str(best_start),
-    '-i', audio_path,
-    '-t', str(segment_duration),
-    '-c:a', 'libmp3lame',
-    '-b:a', '128k',
-    seg_audio_path
-], capture_output=True, text=True, timeout=300)
-
-if proc.returncode != 0 or not os.path.exists(seg_audio_path) or os.path.getsize(seg_audio_path) < 1000:
-    raise ValueError("Best audio segment extraction failed")
-
-audio_path = seg_audio_path
+            if not os.path.exists(audio_path) or os.path.getsize(audio_path) < 1000:
+                raise ValueError(f"Audio file missing or too small: {audio_path}")
 
             # âœ… Pick only the best/loudest 58 seconds from the full song
             jobs[job_id]['status'] = 'cutting_best_audio_segment'
