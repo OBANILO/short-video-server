@@ -125,6 +125,32 @@ def find_best_segment(audio_path, segment_duration=58):
     return best_start
 
 
+def cut_best_audio_segment(audio_path, job_folder, segment_duration=58):
+    total_duration = get_audio_duration(audio_path)
+    if total_duration <= segment_duration:
+        print(f"[BestSegment] Audio shorter than {segment_duration}s, using full audio")
+        return audio_path
+
+    best_start = find_best_segment(audio_path, segment_duration)
+    seg_audio_path = os.path.join(job_folder, 'audio_best.mp3')
+
+    proc = subprocess.run([
+        'ffmpeg', '-y',
+        '-ss', str(best_start),
+        '-i', audio_path,
+        '-t', str(segment_duration),
+        '-c:a', 'libmp3lame',
+        '-b:a', '128k',
+        seg_audio_path
+    ], capture_output=True, text=True, timeout=300)
+
+    if proc.returncode != 0 or not os.path.exists(seg_audio_path) or os.path.getsize(seg_audio_path) < 1000:
+        raise ValueError(f"Best audio segment extraction failed: {proc.stderr[-1000:]}")
+
+    print(f"[BestSegment] Using best audio part: {best_start:.1f}s -> {best_start + segment_duration:.1f}s")
+    return seg_audio_path
+
+
 def ffmpeg_escape(text):
     text = text.replace('\\', '\\\\')
     text = text.replace("'", "\u2019")
@@ -497,10 +523,10 @@ def generate_video():
 
             jobs[job_id]['status'] = 'downloading_assets'
 
-            # ✅ Download video from URL
+            # âœ… Download video from URL
             download_file(video_url, video_path)
 
-            # ✅ Audio: use base64 if provided, otherwise download from URL
+            # âœ… Audio: use base64 if provided, otherwise download from URL
             if audio_b64:
                 print(f"[Audio] Using base64 audio ({len(audio_b64)} chars)")
                 with open(audio_path, 'wb') as f:
@@ -509,29 +535,13 @@ def generate_video():
                 print(f"[Audio] Downloading from URL: {audio_url}")
                 download_file(audio_url, audio_path)
 
-            # ✅ Verify audio file
+            # âœ… Verify audio file
             if not os.path.exists(audio_path) or os.path.getsize(audio_path) < 1000:
                 raise ValueError(f"Audio file missing or too small: {audio_path}")
-                # ✅ Cut best 58s part from full audio
-segment_duration = 58
-best_start = find_best_segment(audio_path, segment_duration)
 
-seg_audio_path = os.path.join(job_folder, 'audio_best.mp3')
-
-proc = subprocess.run([
-    'ffmpeg', '-y',
-    '-ss', str(best_start),
-    '-i', audio_path,
-    '-t', str(segment_duration),
-    '-c:a', 'libmp3lame',
-    '-b:a', '128k',
-    seg_audio_path
-], capture_output=True, text=True, timeout=300)
-
-if proc.returncode != 0 or not os.path.exists(seg_audio_path) or os.path.getsize(seg_audio_path) < 1000:
-    raise ValueError("Best audio segment extraction failed")
-
-audio_path = seg_audio_path
+            # âœ… Pick only the best/loudest 58 seconds from the full song
+            jobs[job_id]['status'] = 'cutting_best_audio_segment'
+            audio_path = cut_best_audio_segment(audio_path, job_folder, segment_duration=58)
 
             lyrics_segments = []
             if openai_key:
